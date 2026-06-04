@@ -1,7 +1,6 @@
 // CONFIGURATION & CONSTANTS
 const BUS_CAPACITY = 60;
 const PRICE_PER_PERSON = 3.00;
-const STORAGE_KEY = 'cupos_bus_registrations';
 
 // APPLICATION STATE
 let state = {
@@ -54,31 +53,27 @@ const DOM = {
     modalDebtPreview: document.getElementById('modal-debt-preview')
 };
 
-// INITIALIZATION
-function init() {
-    loadState();
+// INITIALIZATION (ASINCRÓNICA PARA CONSULTAR BD)
+async function init() {
     setupEventListeners();
     updateLiveCalculations();
+    await loadState();
     render();
 }
 
-// STORAGE ACTIONS
-function loadState() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-        try {
-            state.registrations = JSON.parse(saved);
-        } catch (e) {
-            console.error("Error al cargar localStorage:", e);
-            state.registrations = [];
+// DATABASE ACTIONS (REEMPLAZA LOCALSTORAGE)
+async function loadState() {
+    try {
+        const response = await fetch('api.php?action=list');
+        if (!response.ok) {
+            throw new Error(`Error en servidor: ${response.statusText}`);
         }
-    } else {
+        state.registrations = await response.json();
+    } catch (e) {
+        console.error("Error al cargar registros desde MySQL:", e);
+        alert("⚠️ No se pudo conectar a la base de datos MySQL.\n\nPor favor, verifica que:\n1. XAMPP esté iniciado.\n2. Los módulos Apache y MySQL estén encendidos.\n3. Hayas importado el archivo 'database.sql'.");
         state.registrations = [];
     }
-}
-
-function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.registrations));
 }
 
 // EVENT LISTENERS Setup
@@ -138,7 +133,7 @@ function updateModalDebtPreview() {
     }
 }
 
-// CALCULATE RESERVED SEATS UTILITY
+// CALCULATE RESERVED SEATS UTILITY (CLIENT-SIDE UX CHECK)
 function getOccupiedSeatsList(skipId = null) {
     const list = [];
     state.registrations.forEach(reg => {
@@ -147,23 +142,6 @@ function getOccupiedSeatsList(skipId = null) {
         }
     });
     return list;
-}
-
-// SEAT ALLOCATION ALGORITHM
-// Finds the first N free seats in the bus.
-function allocateSeats(count, skipId = null) {
-    const occupied = getOccupiedSeatsList(skipId);
-    const allocated = [];
-    
-    for (let seat = 1; seat <= BUS_CAPACITY; seat++) {
-        if (!occupied.includes(seat)) {
-            allocated.push(seat);
-            if (allocated.length === count) {
-                return allocated;
-            }
-        }
-    }
-    return null; // Not enough seats
 }
 
 // RENDERING PIPELINE
@@ -209,7 +187,6 @@ function renderSeatsGrid() {
     DOM.seatsContainer.innerHTML = '';
     
     // Create seating map
-    // We have 15 rows. In each row we have: Seat A (1st row cell), Seat B (2nd row cell), Aisle, Seat C (3rd), Seat D (4th)
     const totalRows = 15;
     const occupiedMap = {}; // seatNum -> registration
     
@@ -227,8 +204,6 @@ function renderSeatsGrid() {
         const rowEl = document.createElement('div');
         rowEl.className = 'seat-row';
         
-        // 4 Seats per row: indices 1, 2, 3, 4 for row r
-        // Seat numbers: A (4*r + 1), B (4*r + 2), C (4*r + 3), D (4*r + 4)
         const seatIndices = [
             4 * r + 1, // A
             4 * r + 2, // B
@@ -252,7 +227,6 @@ function renderSeatsGrid() {
             const reg = occupiedMap[sNum];
             
             if (reg) {
-                // Determine seat class based on payment status
                 const debt = (reg.totalSeats * PRICE_PER_PERSON) - reg.paidAmount;
                 let statusClass = 'unpaid';
                 let statusText = 'Sin Pagar';
@@ -267,17 +241,14 @@ function renderSeatsGrid() {
                 
                 seatEl.classList.add(statusClass);
                 
-                // Dim seats if search is active and this seat's leader doesn't match search query
                 if (searchQuery && !reg.name.toLowerCase().includes(searchQuery)) {
                     seatEl.style.opacity = '0.2';
                 }
                 
-                // Add highlight class if active
                 if (state.activeHighlightId === reg.id) {
                     seatEl.classList.add('active-highlight');
                 }
                 
-                // Create custom premium tooltip
                 const tooltip = document.createElement('div');
                 tooltip.className = 'seat-tooltip';
                 tooltip.innerHTML = `
@@ -289,13 +260,11 @@ function renderSeatsGrid() {
                 `;
                 seatEl.appendChild(tooltip);
                 
-                // Seat click behavior: highlight passenger in table
                 seatEl.addEventListener('click', () => {
                     highlightPassenger(reg.id);
                 });
                 
             } else {
-                // Empty seat behavior
                 if (searchQuery) {
                     seatEl.style.opacity = '0.2';
                 }
@@ -306,8 +275,6 @@ function renderSeatsGrid() {
                 seatEl.appendChild(tooltip);
                 
                 seatEl.addEventListener('click', () => {
-                    // Pre-fill companion to make it align with empty seat clicks if wanted
-                    // For now, simple visual indicator
                     highlightPassenger(null);
                 });
             }
@@ -323,7 +290,6 @@ function renderTable() {
     DOM.tableBody.innerHTML = '';
     const searchQuery = DOM.searchInput.value.toLowerCase().trim();
     
-    // Filter registrations by search
     const filtered = state.registrations.filter(reg => 
         reg.name.toLowerCase().includes(searchQuery)
     );
@@ -335,7 +301,6 @@ function renderTable() {
         DOM.noDataMsg.style.display = 'none';
     }
     
-    // Sort registrations: newest first (can be customized)
     filtered.forEach(reg => {
         const tr = document.createElement('tr');
         tr.id = `passenger-row-${reg.id}`;
@@ -356,7 +321,6 @@ function renderTable() {
             statusBadge = '<span class="badge badge-unpaid">Sin Pagar</span>';
         }
         
-        // Assembled visual seat list for display
         const seatsLabel = reg.seats ? reg.seats.join(', ') : 'Ninguno';
         
         tr.innerHTML = `
@@ -396,7 +360,6 @@ function renderTable() {
             </td>
         `;
         
-        // Highlight row on hover to light up corresponding seats
         tr.addEventListener('mouseenter', () => {
             state.activeHighlightId = reg.id;
             renderSeatsGrid();
@@ -422,7 +385,6 @@ function highlightPassenger(id) {
     renderSeatsGrid();
     renderTable();
     
-    // If highlighted, scroll table to that row
     if (id) {
         const row = document.getElementById(`passenger-row-${id}`);
         if (row) {
@@ -432,8 +394,8 @@ function highlightPassenger(id) {
     }
 }
 
-// FORM MANIPULATION (SUBMIT / EDIT / CANCEL)
-function handleFormSubmit(e) {
+// FORM MANIPULATION (SUBMIT / EDIT / CANCEL) - ASÍNCRONO
+async function handleFormSubmit(e) {
     e.preventDefault();
     
     const id = DOM.editIdInput.value;
@@ -444,19 +406,12 @@ function handleFormSubmit(e) {
     
     if (!name) return;
     
-    // Check global capacity limit
+    // Validación de cupo local rápida (para UX fluida)
     const currentOccupied = getOccupiedSeatsList(id ? id : null).length;
     const spaceLeft = BUS_CAPACITY - currentOccupied;
     
     if (totalSeats > spaceLeft) {
         alert(`No hay suficientes asientos disponibles. Quedan ${spaceLeft} cupos libres y solicitaste ${totalSeats}.`);
-        return;
-    }
-    
-    // Assign seats
-    const allocatedSeats = allocateSeats(totalSeats, id ? id : null);
-    if (!allocatedSeats) {
-        alert(`Error crítico al asignar asientos. Por favor, libere espacio.`);
         return;
     }
     
@@ -467,37 +422,34 @@ function handleFormSubmit(e) {
         }
     }
     
-    if (id) {
-        // Edit Mode
-        const index = state.registrations.findIndex(r => r.id === id);
-        if (index !== -1) {
-            state.registrations[index] = {
-                ...state.registrations[index],
-                name: name,
-                companions: companions,
-                totalSeats: totalSeats,
-                paidAmount: paidAmount,
-                seats: allocatedSeats
-            };
+    // Preparar llamada AJAX a api.php
+    const endpoint = id ? 'api.php?action=update' : 'api.php?action=create';
+    const bodyData = id 
+        ? { id, name, companions, paidAmount }
+        : { name, companions, paidAmount };
+        
+    try {
+        DOM.btnSubmit.disabled = true;
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bodyData)
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok || result.status === 'error') {
+            throw new Error(result.message || 'Error desconocido al guardar en el servidor.');
         }
-        state.editingId = null;
-    } else {
-        // Add Mode
-        const newRegistration = {
-            id: Date.now().toString(),
-            name: name,
-            companions: companions,
-            totalSeats: totalSeats,
-            paidAmount: paidAmount,
-            seats: allocatedSeats,
-            createdAt: new Date().toISOString()
-        };
-        state.registrations.push(newRegistration);
+        
+        cancelFormEdit(); // Limpiar formulario
+        await loadState(); // Cargar la nueva lista desde MySQL
+        render();          // Renderizar UI
+    } catch (err) {
+        alert("⚠️ Error al guardar: " + err.message);
+    } finally {
+        DOM.btnSubmit.disabled = false;
     }
-    
-    saveState();
-    cancelFormEdit(); // Reset form
-    render();
 }
 
 // Global functions attached to window for table action buttons onclick
@@ -511,14 +463,11 @@ window.editRegistration = function(id) {
     DOM.companionsInput.value = reg.companions;
     DOM.paymentInput.value = reg.paidAmount.toFixed(2);
     
-    // Modify UI to reflect edit state
     DOM.btnSubmit.querySelector('span').textContent = "Actualizar Registro";
     DOM.btnSubmit.style.background = "linear-gradient(135deg, var(--color-partial) 0%, #d97706 100%)";
     DOM.btnCancelEdit.style.display = 'block';
     
     updateLiveCalculations();
-    
-    // Scroll form into view
     DOM.form.scrollIntoView({ behavior: 'smooth', block: 'center' });
 };
 
@@ -527,7 +476,6 @@ function cancelFormEdit() {
     DOM.editIdInput.value = '';
     DOM.form.reset();
     
-    // Restore UI state
     DOM.btnSubmit.querySelector('span').textContent = "Guardar Registro";
     DOM.btnSubmit.style.background = "linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%)";
     DOM.btnCancelEdit.style.display = 'none';
@@ -535,21 +483,33 @@ function cancelFormEdit() {
     updateLiveCalculations();
 }
 
-window.deleteRegistration = function(id) {
+window.deleteRegistration = async function(id) {
     const reg = state.registrations.find(r => r.id === id);
     if (!reg) return;
     
     const confirmMsg = `¿Está seguro de eliminar el registro de "${reg.name}"?\nSe liberarán ${reg.totalSeats} asientos (${reg.seats.join(', ')}).`;
     if (confirm(confirmMsg)) {
-        state.registrations = state.registrations.filter(r => r.id !== id);
-        
-        // If we were editing this registration, reset form
-        if (state.editingId === id) {
-            cancelFormEdit();
+        try {
+            const response = await fetch('api.php?action=delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            });
+            
+            const result = await response.json();
+            if (!response.ok || result.status === 'error') {
+                throw new Error(result.message || 'Error al eliminar el registro.');
+            }
+            
+            if (state.editingId === id) {
+                cancelFormEdit();
+            }
+            
+            await loadState(); // Recargar datos de MySQL
+            render();
+        } catch (err) {
+            alert("⚠️ Error al eliminar: " + err.message);
         }
-        
-        saveState();
-        render();
     }
 };
 
@@ -566,7 +526,7 @@ window.openPaymentModal = function(id) {
     DOM.modalPassengerTotal.textContent = `$${totalCost.toFixed(2)}`;
     
     DOM.modalPaymentInput.value = reg.paidAmount.toFixed(2);
-    DOM.modalPaymentInput.max = totalCost; // help hint
+    DOM.modalPaymentInput.max = totalCost; // ayuda visual
     
     updateModalDebtPreview();
     
@@ -580,20 +540,30 @@ function closePaymentModal() {
     DOM.modalForm.reset();
 }
 
-function handleModalPaymentSubmit(e) {
+async function handleModalPaymentSubmit(e) {
     e.preventDefault();
     
     const id = DOM.modalPassengerId.value;
     const payment = parseFloat(DOM.modalPaymentInput.value) || 0;
     
-    const index = state.registrations.findIndex(r => r.id === id);
-    if (index !== -1) {
-        state.registrations[index].paidAmount = payment;
-        saveState();
+    try {
+        const response = await fetch('api.php?action=update_payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: id, paidAmount: payment })
+        });
+        
+        const result = await response.json();
+        if (!response.ok || result.status === 'error') {
+            throw new Error(result.message || 'Error al guardar el abono.');
+        }
+        
+        await loadState(); // Recargar datos
         render();
+        closePaymentModal();
+    } catch (err) {
+        alert("⚠️ Error al guardar abono: " + err.message);
     }
-    
-    closePaymentModal();
 }
 
 // SEARCH FILTER HANDLER
@@ -639,7 +609,7 @@ function exportCSV() {
     
     const date = new Date().toISOString().split('T')[0];
     link.setAttribute("download", `Reporte_Pasajeros_Bus_${date}.csv`);
-    document.body.appendChild(link); // Required for FF
+    document.body.appendChild(link);
     
     link.click();
     document.body.removeChild(link);
@@ -657,7 +627,6 @@ function triggerPrintPDF() {
         pending += (reg.totalSeats * PRICE_PER_PERSON) - reg.paidAmount;
     });
     
-    // Fill the print-only elements
     const printDateEl = document.getElementById('print-date');
     const printOccupiedEl = document.getElementById('print-occupied-count');
     const printCollectedEl = document.getElementById('print-collected-amount');
@@ -668,7 +637,6 @@ function triggerPrintPDF() {
     if (printCollectedEl) printCollectedEl.textContent = `$${collected.toFixed(2)}`;
     if (printPendingEl) printPendingEl.textContent = `$${pending.toFixed(2)}`;
     
-    // Run window print dialog
     window.print();
 }
 
@@ -684,7 +652,6 @@ function escapeHTML(str) {
 
 // RUN ON LOAD
 document.addEventListener('DOMContentLoaded', init);
-// Backup support if DOMContentLoaded already fired
 if (document.readyState === "complete" || document.readyState === "interactive") {
     init();
 }
